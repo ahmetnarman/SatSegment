@@ -11,8 +11,6 @@ import os
 import shutil
 from PIL import Image
 
-
-
 Cuda = torch.cuda.is_available()
 
 # %% Class definitions for the task to make the model easy to use and understand, and to make it 
@@ -51,6 +49,7 @@ class SatelliteDataset(torch.utils.data.Dataset):
         return self.trainData[idx], self.trainLabels[idx]
         
     def getTrainingData(self):
+        """Generates and returns the training images and labels"""
         images, labels = self.sliceRaw('train')
         
         # Removing images that are completely black from the training set because they provide no context
@@ -69,18 +68,23 @@ class SatelliteDataset(torch.utils.data.Dataset):
         return images, labels
 
     def getTestingData(self):
-        
+        """Generates and returns the testing images and labels"""
         images, labels = self.sliceRaw('test')
         
         return images, labels
     
     def augmentData(self, images, labels):
+        """
+        Applies different augmentation techniques to the data to extend the training dataset
+        and improve generalization performance
+        """
+        
         # First step of the augmentation is rotating the images in different angles
         # The buildings on the dataset can have different orientations so this augmentation is very useful
         # Each augmentation type is done on the dataset extended by the previous augmentation
         
         # Images rotated by intervals of 90 degrees (Quadruples the data)
-        # More frequent rotations could be done as well but 
+        # More frequent rotations could be done as well but that makes the training dataset too large
         for i in range(len(images)): # For loops are done over indexes so transformation can be done on both images and labels
             for ang in range(90,360,90): # zero degrees is not included as it is already in the array
                 images.append(TF.rotate(images[i], ang, resample = Image.BILINEAR, expand=True))
@@ -97,13 +101,15 @@ class SatelliteDataset(torch.utils.data.Dataset):
             labels.append(TF.vflip(labels[i]))
 
         # Brightness and contrast adjusted images added (Triples the data)
-        # They could be adjusted separately but that would make the dataset too big
+        # They could be adjusted separately but that would make the dataset too large
         for i in range(len(images)):
             images.append(TF.adjust_contrast(TF.adjust_brightness(images[i], brightness_factor=1.2), contrast_factor=1.2))
             labels.append(labels[i]) # Label brightness does not change
             images.append(TF.adjust_contrast(TF.adjust_brightness(images[i], brightness_factor=0.8), contrast_factor=0.8))
             labels.append(labels[i]) # Label brightness does not change
-              
+            
+        # With current augmentation pipeline, around 7500 training images are generated
+        
         return images, labels
     
     def sliceRaw(self, mode):
@@ -132,10 +138,7 @@ class SatelliteDataset(torch.utils.data.Dataset):
             return images, labels
 
     def saveDataset(self, override=False):
-        """
-        Saves the images and labels extracted from the raw images to local files
-        
-        """
+        """Saves the images and labels extracted from the raw images to local files"""
         if not os.path.isdir('dataset') or override:
             
             if os.path.isdir('dataset'):
@@ -170,14 +173,14 @@ class SatelliteDataset(torch.utils.data.Dataset):
 
             
 class SatelliteDataLoader(torch.utils.data.DataLoader):
-    
-    def __init__(self, batch_sie=1, shuffle=False):
+    """Used for loading the data from hard drive and converting it to a batched tensor form"""
+    def __init__(self, batch_size=1, shuffle=False):
         pass
         # I dont know about this one
         #super().__init__(super().batch_size=batch_size, super().shuffle=shuffle)
         
 class Model(nn.Module):
-    
+    """Neural network model definition"""
     def __init__(self):
         super(Model, self).__init__()
         
