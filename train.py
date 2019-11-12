@@ -11,14 +11,12 @@ import os
 import shutil
 from PIL import Image
 
-Cuda = torch.cuda.is_available()
-
-# %% Class definitions for the task to make the model easy to use and understand, and to make it 
-# easy to maintain. It includes methods and attributes relevant to this task but they can be extended
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class SatelliteDataset(torch.utils.data.Dataset):
     """
     The dataset of satellite images and the ground truth segmentations that labels buildings on a pixel level
+    The dataset is created or loaded from local files when a dataset object is created
     """
     def __init__(self, image, gt, load=True):
         """
@@ -37,11 +35,22 @@ class SatelliteDataset(torch.utils.data.Dataset):
         self.res = self.rawData.size # The raw image resolution (2048*1536)
         self.modelRes = 256 # Denotes the height and width of the model input (256*256)
         
-        self.trainData, self.trainLabels = self.getTrainingData()
+        if load and os.path.isdir('dataset'):
+            self.trainData = os.listdir(os.path.join('dataset','train','images'))
+            self.trainLabels = os.listdir(os.path.join('dataset','train','labels'))
+            
+            self.testData = os.listdir(os.path.join('dataset','test','images'))
+            self.testLabels = os.listdir(os.path.join('dataset','test','labels'))
+        else:
+            self.saveDataset()
+            print('success')
+            self.trainData = os.listdir(os.path.join('dataset','train','images'))
+            self.trainLabels = os.listdir(os.path.join('dataset','train','labels'))
+            
+            self.testData = os.listdir(os.path.join('dataset','test','images'))
+            self.testLabels = os.listdir(os.path.join('dataset','test','labels'))
         
-        self.testData, self.testLabels = self.getTestingData()
-        
-        self.saveDataset(override=False)
+        #self.saveDataset(override=True)
         
     def __len__(self):
         return len(self.trainData)
@@ -49,22 +58,67 @@ class SatelliteDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         """Returns the image and label of specified index from the training dataset in tensor form"""
         
-        imTensor = torch.from_numpy(np.array(self.trainData[idx]).transpose((2,0,1))) # To rearrange the dimensions
-        
-        # gtTensor should be in one-hot form instead of black and white images
-        
-        #### ONE HOT DOES NOT WORK
-        temp = np.array(self.trainData[idx]).transpose((2,0,1))[0,:,:]/255 # Either 1 or 0 for each pixel
-        gtTensor = F.one_hot(torch.from_numpy(temp), num_classes = 2) # Generated tensor size: W*H*2
-
-        gtTensor = torch.transpose(torch.transpose(gtTensor, 0,2), 1,2) #  tensor size: 2*W*H
-        
-        # TODO test if this method returns the tensors properly
+        image,label = self.getSample(idx)
+        imTensor, gtTensor = self.im2tensor(image, label) 
         
         sample = {'image':imTensor, 'label':gtTensor}
         return sample
+    
+    def getTestBatch(self):
+        """Returns the testing data in a batch for putting through the module"""
         
-    def getTrainingData(self):
+        images = []
+        labels = []
+        for i in range(len(os.listdir(os.path.join('dataset','test','images')))):
+            images.append(np.array(Image.open(os.path.join('dataset','test','images','im'+str(i)+'.png'))).transpose((2,0,1)))
+            labels.append(np.array(Image.open(os.path.join('dataset','test','labels','gt'+str(i)+'.png'))).transpose((2,0,1))[0,:,:]/255)
+        imTensor = torch.from_numpy(np.stack(images, axis=0))
+        gtTensor = torch.from_numpy(np.stack(labels,axis=0))
+                
+        sample = {'image':imTensor, 'label':gtTensor}
+        
+        return sample
+    
+    def getSample(self, idx):
+        """ Returns an image,label pair in image format"""
+        
+        image = Image.open(os.path.join('dataset','train','images','im'+str(idx)+'.png'))
+        label = Image.open(os.path.join('dataset','train','labels','gt'+str(idx)+'.png'))
+        
+        return image,label
+    
+    def im2tensor(self, image, label):
+        imTensor = torch.from_numpy(np.array(image).transpose((2,0,1))) # To rearrange the dimensions into 3*W*H
+        # Has dimensions of W*H, pixel value segments: 1=background, 0=building
+        gtTensor = torch.from_numpy(np.array(label).transpose((2,0,1))[0,:,:]/255)
+        
+        return imTensor.float(), gtTensor.long()
+        
+    def onehot2im(self, labTensor):
+        """ 
+        Converts tensors to images, important for visualizing the segmentations
+        The input to this function should be one image instead of a batched tensor
+        """
+        label = np.array(torch.argmax(labTensor, 0), dtype='uint8')*255
+        label = np.stack((label,label,label),axis=2)
+        label = Image.fromarray(label)
+        return label
+    
+    def reconstructRaw(self, output):
+        """ Takes in the batched testing output of the neural net and reconstructs the raw segmentation"""
+        images = []
+        for i in range(output.shape[0]):
+            images.append(np.array(self.onehot2im(output[i,:,:,:]), dtype='uint8'))
+        
+        bigImage = np.zeros((self.res[1],self.res[0],3))
+        ind = 0
+        for i in range(int(self.res[0]/self.modelRes)):
+            for j in range(int(self.res[1]/self.modelRes)):
+                bigImage[j*self.modelRes:(j+1)*self.modelRes,i*self.modelRes:(i+1)*self.modelRes,:] = images[ind]
+                ind += 1
+        return bigImage        
+        
+    def buildTrainingData(self):
         """Generates and returns the training images and labels"""
         images, labels = self.sliceRaw('train')
         
@@ -83,11 +137,12 @@ class SatelliteDataset(torch.utils.data.Dataset):
         
         return images, labels
 
-    def getTestingData(self):
+    def buildTestingData(self):
         """Generates and returns the testing images and labels"""
         images, labels = self.sliceRaw('test')
         
         return images, labels
+        
     
     def augmentData(self, images, labels):
         """
@@ -111,11 +166,11 @@ class SatelliteDataset(torch.utils.data.Dataset):
             images.append(TF.hflip(images[i]))
             labels.append(TF.hflip(labels[i]))
             
-        # Images flipped vertically (Doubles the data)        
+        # Images flipped vertically (Doubles the data)
         for i in range(len(images)):
             images.append(TF.vflip(images[i]))
             labels.append(TF.vflip(labels[i]))
-
+        """
         # Brightness and contrast adjusted images added (Triples the data)
         # They could be adjusted separately but that would make the dataset too large
         for i in range(len(images)):
@@ -123,7 +178,7 @@ class SatelliteDataset(torch.utils.data.Dataset):
             labels.append(labels[i]) # Label brightness does not change
             images.append(TF.adjust_contrast(TF.adjust_brightness(images[i], brightness_factor=0.8), contrast_factor=0.8))
             labels.append(labels[i]) # Label brightness does not change
-            
+        """
         # With current augmentation pipeline, around 7500 training images are generated
         
         return images, labels
@@ -179,23 +234,18 @@ class SatelliteDataset(torch.utils.data.Dataset):
             os.chdir('..')
             os.chdir('..')
             
-            for i in range(len(self.trainData)):
-                self.trainData[i].save(os.path.join('dataset', 'train', 'images', 'im'+str(i)+'.png'))
-                self.trainLabels[i].save(os.path.join('dataset', 'train', 'labels', 'gt'+str(i)+'.png'))
+            trainIms,trainLabs = self.buildTrainingData()
+            testIms,testLabs = self.buildTestingData()
             
-            for i in range(len(self.testData)):
-                self.testData[i].save(os.path.join('dataset', 'test', 'images', 'im'+str(i)+'.png'))
-                self.testLabels[i].save(os.path.join('dataset', 'test', 'labels', 'gt'+str(i)+'.png'))
+            for i in range(len(trainIms)):
+                trainIms[i].save(os.path.join('dataset', 'train', 'images', 'im'+str(i)+'.png'))
+                trainLabs[i].save(os.path.join('dataset', 'train', 'labels', 'gt'+str(i)+'.png'))
+            
+            for i in range(len(testIms)):
+                testIms[i].save(os.path.join('dataset', 'test', 'images', 'im'+str(i)+'.png'))
+                testLabs[i].save(os.path.join('dataset', 'test', 'labels', 'gt'+str(i)+'.png'))
         else:
             print('The dataset is already created. To save a new one, use the override option')
-
-            
-class SatelliteDataLoader(torch.utils.data.DataLoader):
-    """Used for loading the data from hard drive and converting it to a batched tensor form"""
-    def __init__(self, batch_size=1, shuffle=False):
-        pass
-        # I dont know about this one
-        #super().__init__(super().batch_size=batch_size, super().shuffle=shuffle)
         
 class Model(nn.Module):
     """Neural network model definition"""
@@ -226,6 +276,14 @@ gt = Image.open('gt.png')
 imDim = im.size # 2022*1608
 
 dataset = SatelliteDataset(im, gt)
+trainLoader = torch.utils.data.DataLoader(dataset, batch_size = 75, shuffle=True, num_workers=2)
+
+# Checking if the dataloader returns the batches with proper size
+for i_batch, sample_batched in enumerate(trainLoader):
+    print(i_batch, sample_batched['image'].size(),sample_batched['label'].size())
+    # observe 4th batch and stop.
+    if i_batch == 3:
+        break
 
 trainIms = dataset.trainData
 trainLabels = dataset.trainLabels
@@ -233,43 +291,35 @@ trainLabels = dataset.trainLabels
 testIms = dataset.testData
 testLabels = dataset.testLabels
 
+# a sample tensor pair
 a = dataset[10]
+imA = np.array(a['image'])
+gtA = np.array(a['label']) 
 
-"""
-plt.figure()
-for i in range(8):
-    rInd = np.random.randint(0,high = len(testIms))
-    plt.suptitle('Data samples from the testing dataset')
-    plt.subplot(4,8,i+1)
-    plt.imshow(testIms[rInd])
-    plt.subplot(4,8,i+9)
-    plt.imshow(testLabels[rInd])
-    rInd = np.random.randint(0,high = len(testIms))
-    plt.subplot(4,8,i+17)
-    plt.imshow(testIms[rInd])
-    plt.subplot(4,8,i+25)
-    plt.imshow(testLabels[rInd])
+# Plotting random images from the training set
 """
 plt.figure()
 for i in range(8):
     plt.suptitle('Data samples from the training dataset')
     rInd = np.random.randint(0,high = len(trainIms))
+    image, label = dataset.getSample(rInd)
     plt.subplot(4,8,i+1)
-    plt.imshow(trainIms[rInd])
+    plt.imshow(image)
     plt.subplot(4,8,i+9)
-    plt.imshow(trainLabels[rInd])
+    plt.imshow(label)
     rInd = np.random.randint(0,high = len(trainIms))
+    image, label = dataset.getSample(rInd)
     plt.subplot(4,8,i+17)
-    plt.imshow(trainIms[rInd])
+    plt.imshow(image)
     plt.subplot(4,8,i+25)
-    plt.imshow(trainLabels[rInd])
+    plt.imshow(label)
 plt.show()
-
+"""
 
 # It was found that the ground truth contains two values for every pixel: 
 # - (255,255,255): White segments in the ground truth image
 # - (0,0,0): Black segments in the ground truth image
-
+"""
 plt.figure(figsize=(13,6))
 plt.subplot(1,2,1)
 plt.imshow(dataset.rawData)
@@ -277,7 +327,7 @@ plt.title('Input image')
 plt.subplot(1,2,2)
 plt.imshow(dataset.rawLabels)
 plt.title('Ground truth labels')
-     
+"""
 # Because of the memory limitations, the input size of our model can be 256*256*3 at most
 # Thus, the input image and the corresponding ground truth images should be separated into smaller images
 # for training and evaluating.
@@ -289,10 +339,40 @@ plt.title('Ground truth labels')
 
 # %% Training the model
 
-net = Model()
+net = Model().to(device) # If CUDA is available, the model will use GPU for training and testing
 
 # As each pixel is classified into two classes, cross-entrophy loss function was used
-optimizerLoss = nn.CrossEntrophyLoss()
+optimizerLoss = nn.CrossEntropyLoss()
 
 #Adam was chosen as optimizer because of its superior optimization performance
 optimizer = torch.optim.Adam(net.parameters(), betas=(0.9, 0.99)) 
+
+it = 1
+losses = []
+for epoch in range(10):
+    epochLoss = 0
+    for i_batch, sample_batched in enumerate(trainLoader):
+        print('Batch: '+str(i_batch))
+        inputs, labels = sample_batched['image'].to(device), sample_batched['label'].to(device)
+        
+        # making parameter gradients zero before forward and back pass
+        optimizer.zero_grad()
+        outputs = net(inputs)
+        loss = optimizerLoss(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        check = outputs.detach().cpu().numpy()[1,:,:,:]
+        epochLoss += loss.item()
+    # Run through the test samples at the end of each epoch
+    testSample = dataset.getTestBatch()
+    with torch.no_grad():
+        inputs, labels = testSample['image'].float().to(device), testSample['label'].long().to(device)
+        print(inputs.shape)
+        
+        outputs = net(inputs)
+        print(outputs.shape)
+        bigIm = dataset.reconstructRaw(outputs.cpu())
+        plt.figure()
+        plt.imshow(bigIm)
+        loss = optimizerLoss(outputs, labels)
+        print(loss)
