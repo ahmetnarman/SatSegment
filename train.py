@@ -20,7 +20,7 @@ class SatelliteDataset(torch.utils.data.Dataset):
     """
     The dataset of satellite images and the ground truth segmentations that labels buildings on a pixel level
     """
-    def __init__(self, image, gt):
+    def __init__(self, image, gt, load=True):
         """
         Arguments:
             image: The raw sattelite image that will be used to generate the dataset (W*H*3)
@@ -41,12 +41,28 @@ class SatelliteDataset(torch.utils.data.Dataset):
         
         self.testData, self.testLabels = self.getTestingData()
         
-        self.saveDataset(override=True)
+        self.saveDataset(override=False)
+        
+    def __len__(self):
+        return len(self.trainData)
         
     def __getitem__(self, idx):
-        """Returns the image and label of specified index from the training dataset"""
+        """Returns the image and label of specified index from the training dataset in tensor form"""
         
-        return self.trainData[idx], self.trainLabels[idx]
+        imTensor = torch.from_numpy(np.array(self.trainData[idx]).transpose((2,0,1))) # To rearrange the dimensions
+        
+        # gtTensor should be in one-hot form instead of black and white images
+        
+        #### ONE HOT DOES NOT WORK
+        temp = np.array(self.trainData[idx]).transpose((2,0,1))[0,:,:]/255 # Either 1 or 0 for each pixel
+        gtTensor = F.one_hot(torch.from_numpy(temp), num_classes = 2) # Generated tensor size: W*H*2
+
+        gtTensor = torch.transpose(torch.transpose(gtTensor, 0,2), 1,2) #  tensor size: 2*W*H
+        
+        # TODO test if this method returns the tensors properly
+        
+        sample = {'image':imTensor, 'label':gtTensor}
+        return sample
         
     def getTrainingData(self):
         """Generates and returns the training images and labels"""
@@ -139,6 +155,8 @@ class SatelliteDataset(torch.utils.data.Dataset):
 
     def saveDataset(self, override=False):
         """Saves the images and labels extracted from the raw images to local files"""
+        # The images saved to local files are not actually used at this stage as storing the current dataset requires around only 1GB of RAM
+        # If the dataset is extended further, storing everything on RAM would be problematic and loading data from local files would be necessary
         if not os.path.isdir('dataset') or override:
             
             if os.path.isdir('dataset'):
@@ -214,6 +232,9 @@ trainLabels = dataset.trainLabels
 
 testIms = dataset.testData
 testLabels = dataset.testLabels
+
+a = dataset[10]
+
 """
 plt.figure()
 for i in range(8):
@@ -256,13 +277,7 @@ plt.title('Input image')
 plt.subplot(1,2,2)
 plt.imshow(dataset.rawLabels)
 plt.title('Ground truth labels')
-
-
-#%% Data preprocessing
-
-
-
-        
+     
 # Because of the memory limitations, the input size of our model can be 256*256*3 at most
 # Thus, the input image and the corresponding ground truth images should be separated into smaller images
 # for training and evaluating.
@@ -272,16 +287,12 @@ plt.title('Ground truth labels')
 
 # Normalization is done on the input data
 
+# %% Training the model
 
-'''
-imPart = imNp[800:918,0:128,:]
-gtPart = gtNp[800:918,0:128,:]
+net = Model()
 
-plt.figure(figsize=(13,6))
-plt.subplot(1,2,1)
-plt.imshow(imPart)
-plt.title('Input image')
-plt.subplot(1,2,2)
-plt.imshow(gtPart)
-plt.title('Ground truth labels')
-'''
+# As each pixel is classified into two classes, cross-entrophy loss function was used
+optimizerLoss = nn.CrossEntrophyLoss()
+
+#Adam was chosen as optimizer because of its superior optimization performance
+optimizer = torch.optim.Adam(net.parameters(), betas=(0.9, 0.99)) 
