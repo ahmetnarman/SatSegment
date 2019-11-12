@@ -16,13 +16,14 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 class SatelliteDataset(torch.utils.data.Dataset):
     """
     The dataset of satellite images and the ground truth segmentations that labels buildings on a pixel level
-    The dataset is created or loaded from local files when a dataset object is created
+    This dataset is created using the raw image and the ground truth label provided
+    The dataset is created or loaded from local files if it is already created
     """
     def __init__(self, image, gt, load=True):
         """
         Arguments:
-            image: The raw sattelite image that will be used to generate the dataset (W*H*3)
-            gt: The labels of the sattelite image (W*H*3)
+            image: The raw sattelite image (PIL) that will be used to generate the dataset (W*H*3)
+            gt: The labels of the sattelite image (PIL) (W*H*3)
         """
         assert image.size == gt.size # The input image and labels must have the same W*H
         
@@ -36,27 +37,22 @@ class SatelliteDataset(torch.utils.data.Dataset):
         self.modelRes = 256 # Denotes the height and width of the model input (256*256)
         
         if load and os.path.isdir('dataset'):
-            self.trainData = os.listdir(os.path.join('dataset','train','images'))
-            self.trainLabels = os.listdir(os.path.join('dataset','train','labels'))
-            
-            self.testData = os.listdir(os.path.join('dataset','test','images'))
-            self.testLabels = os.listdir(os.path.join('dataset','test','labels'))
+            self.trainData,self.trainData,self.trainData,self.trainData = self.loadDataset()
         else:
-            self.saveDataset()
-            print('success')
-            self.trainData = os.listdir(os.path.join('dataset','train','images'))
-            self.trainLabels = os.listdir(os.path.join('dataset','train','labels'))
+            self.createDataset()
+            print('New dataset created successfully...')
             
-            self.testData = os.listdir(os.path.join('dataset','test','images'))
-            self.testLabels = os.listdir(os.path.join('dataset','test','labels'))
-        
-        #self.saveDataset(override=True)
+            self.trainData,self.trainLabels,self.testData,self.testData = self.loadDataset()
         
     def __len__(self):
+        """Returns the size of the training dataset"""
         return len(self.trainData)
         
     def __getitem__(self, idx):
-        """Returns the image and label of specified index from the training dataset in tensor form"""
+        """
+        Returns the image and label of specified index from the training dataset in tensor form
+        Used by the dataLoader object of PyTorch
+        """
         
         image,label = self.getSample(idx)
         imTensor, gtTensor = self.im2tensor(image, label) 
@@ -64,23 +60,38 @@ class SatelliteDataset(torch.utils.data.Dataset):
         sample = {'image':imTensor, 'label':gtTensor}
         return sample
     
+    def loadDataset(self):
+        """ Loads the list of images and labels, for training and testing sets """
+        
+        trData = os.listdir(os.path.join('dataset','train','images'))
+        trLabels = os.listdir(os.path.join('dataset','train','labels'))
+        
+        teData = os.listdir(os.path.join('dataset','test','images'))
+        teLabels = os.listdir(os.path.join('dataset','test','labels'))
+        
+        return trData, trLabels, teData, teLabels
+    
     def getTestBatch(self):
-        """Returns the testing data in a batch for putting through the module"""
+        """
+        This function returns the testing data in a batch for putting through the module
+        as the dataLoader only provides samples from the training set
+        """
         
         images = []
         labels = []
         for i in range(len(os.listdir(os.path.join('dataset','test','images')))):
             images.append(np.array(Image.open(os.path.join('dataset','test','images','im'+str(i)+'.png'))).transpose((2,0,1)))
             labels.append(np.array(Image.open(os.path.join('dataset','test','labels','gt'+str(i)+'.png'))).transpose((2,0,1))[0,:,:]/255)
-        imTensor = torch.from_numpy(np.stack(images, axis=0))
-        gtTensor = torch.from_numpy(np.stack(labels,axis=0))
+        
+        imTensor = torch.from_numpy(np.stack(images, axis=0)) # Stacking to create a batch
+        gtTensor = torch.from_numpy(np.stack(labels, axis=0))
                 
         sample = {'image':imTensor, 'label':gtTensor}
         
         return sample
     
     def getSample(self, idx):
-        """ Returns an image,label pair in image format"""
+        """ Returns an image,label pair from local files in PIL image format """
         
         image = Image.open(os.path.join('dataset','train','images','im'+str(idx)+'.png'))
         label = Image.open(os.path.join('dataset','train','labels','gt'+str(idx)+'.png'))
@@ -88,17 +99,26 @@ class SatelliteDataset(torch.utils.data.Dataset):
         return image,label
     
     def im2tensor(self, image, label):
-        imTensor = torch.from_numpy(np.array(image).transpose((2,0,1))) # To rearrange the dimensions into 3*W*H
-        # Has dimensions of W*H, pixel value segments: 1=background, 0=building
+        """ 
+        Converts images to tensors to be fed through the model
+        Because PyTorch batch notation has the format of [batch_size, channels, height, width], 
+        the W*H*3 array notation will be rearranged for the tensors
+        """
+        
+        imTensor = torch.from_numpy(np.array(image).transpose((2,0,1))) # Rearranging the dimensions into 3*W*H
+        
+        # Below tensor has dimensions of W*H. Pixel values: 1=background, 0=building
         gtTensor = torch.from_numpy(np.array(label).transpose((2,0,1))[0,:,:]/255)
         
-        return imTensor.float(), gtTensor.long()
+        return imTensor.float(), gtTensor.long() # Converting to the required format for training
         
     def onehot2im(self, labTensor):
         """ 
-        Converts tensors to images, important for visualizing the segmentations
-        The input to this function should be one image instead of a batched tensor
+        Converts tensors produced by the model to images
+        For visualizing the segmentations
+        The input to this function should be an image tensor of shape 2*W*H instead of a batched tensor
         """
+        
         label = np.array(torch.argmax(labTensor, 0), dtype='uint8')*255
         label = np.stack((label,label,label),axis=2)
         label = Image.fromarray(label)
@@ -106,6 +126,7 @@ class SatelliteDataset(torch.utils.data.Dataset):
     
     def reconstructRaw(self, output):
         """ Takes in the batched testing output of the neural net and reconstructs the raw segmentation"""
+        
         images = []
         for i in range(output.shape[0]):
             images.append(np.array(self.onehot2im(output[i,:,:,:]), dtype='uint8'))
@@ -119,7 +140,8 @@ class SatelliteDataset(torch.utils.data.Dataset):
         return bigImage        
         
     def buildTrainingData(self):
-        """Generates and returns the training images and labels"""
+        """Generates and returns the training images and labels, uses data augmentation"""
+        
         images, labels = self.sliceRaw('train')
         
         # Removing images that are completely black from the training set because they provide no context
@@ -139,6 +161,7 @@ class SatelliteDataset(torch.utils.data.Dataset):
 
     def buildTestingData(self):
         """Generates and returns the testing images and labels"""
+        
         images, labels = self.sliceRaw('test')
         
         return images, labels
@@ -146,17 +169,12 @@ class SatelliteDataset(torch.utils.data.Dataset):
     
     def augmentData(self, images, labels):
         """
-        Applies different augmentation techniques to the data to extend the training dataset
-        and improve generalization performance
+        Applies different augmentation techniques to the data to extend the training dataset and improve generalization performance
         """
-        
-        # First step of the augmentation is rotating the images in different angles
-        # The buildings on the dataset can have different orientations so this augmentation is very useful
-        # Each augmentation type is done on the dataset extended by the previous augmentation
         
         # Images rotated by intervals of 90 degrees (Quadruples the data)
         # More frequent rotations could be done as well but that makes the training dataset too large
-        for i in range(len(images)): # For loops are done over indexes so transformation can be done on both images and labels
+        for i in range(len(images)):
             for ang in range(90,360,90): # zero degrees is not included as it is already in the array
                 images.append(TF.rotate(images[i], ang, resample = Image.BILINEAR, expand=True))
                 labels.append(TF.rotate(labels[i], ang, resample = Image.BILINEAR, expand=True))
@@ -185,6 +203,7 @@ class SatelliteDataset(torch.utils.data.Dataset):
     
     def sliceRaw(self, mode):
         """Slices the raw data (image and ground truth) into 256*256 pieces"""
+        
         if mode == 'test':  
             # For testing data, only the images that are just sliced from the raw image are used
             images = []
@@ -208,44 +227,43 @@ class SatelliteDataset(torch.utils.data.Dataset):
                     labels.append(TF.crop(self.rawLabels, j*temp, i*temp, temp*2, temp*2))         
             return images, labels
 
-    def saveDataset(self, override=False):
-        """Saves the images and labels extracted from the raw images to local files"""
-        # The images saved to local files are not actually used at this stage as storing the current dataset requires around only 1GB of RAM
-        # If the dataset is extended further, storing everything on RAM would be problematic and loading data from local files would be necessary
-        if not os.path.isdir('dataset') or override:
-            
-            if os.path.isdir('dataset'):
-                shutil.rmtree('dataset') # shutil is used to remove a nonempty directory
-            os.mkdir('dataset')
-            
-            os.chdir('dataset')
-            os.mkdir('train')
-            os.mkdir('test')
-            
-            os.chdir('train')
-            os.mkdir('images')
-            os.mkdir('labels')
+    def createDataset(self):
+        """
+        Saves the images and labels extracted from the raw images intoto local files
+        WARNING: If you already have a dataset created, this method overrides it
+        """
+
+        if os.path.isdir('dataset'):
+            shutil.rmtree('dataset') # shutil is used to remove a nonempty directory
+        os.mkdir('dataset')
+        
+        os.chdir('dataset')
+        os.mkdir('train')
+        os.mkdir('test')
+        
+        os.chdir('train')
+        os.mkdir('images')
+        os.mkdir('labels')
   
-            os.chdir('..')
-            os.chdir('test')     
-            os.mkdir('images')
-            os.mkdir('labels')
-            
-            os.chdir('..')
-            os.chdir('..')
-            
-            trainIms,trainLabs = self.buildTrainingData()
-            testIms,testLabs = self.buildTestingData()
-            
-            for i in range(len(trainIms)):
-                trainIms[i].save(os.path.join('dataset', 'train', 'images', 'im'+str(i)+'.png'))
-                trainLabs[i].save(os.path.join('dataset', 'train', 'labels', 'gt'+str(i)+'.png'))
-            
-            for i in range(len(testIms)):
-                testIms[i].save(os.path.join('dataset', 'test', 'images', 'im'+str(i)+'.png'))
-                testLabs[i].save(os.path.join('dataset', 'test', 'labels', 'gt'+str(i)+'.png'))
-        else:
-            print('The dataset is already created. To save a new one, use the override option')
+        os.chdir('..')
+        os.chdir('test')     
+        os.mkdir('images')
+        os.mkdir('labels')
+        
+        os.chdir('..')
+        os.chdir('..')
+        
+        trainIms,trainLabs = self.buildTrainingData()
+        testIms,testLabs = self.buildTestingData()
+        
+        for i in range(len(trainIms)):
+            trainIms[i].save(os.path.join('dataset', 'train', 'images', 'im'+str(i)+'.png'))
+            trainLabs[i].save(os.path.join('dataset', 'train', 'labels', 'gt'+str(i)+'.png'))
+        
+        for i in range(len(testIms)):
+            testIms[i].save(os.path.join('dataset', 'test', 'images', 'im'+str(i)+'.png'))
+            testLabs[i].save(os.path.join('dataset', 'test', 'labels', 'gt'+str(i)+'.png'))
+        
         
 class Model(nn.Module):
     """Neural network model definition"""
@@ -260,23 +278,23 @@ class Model(nn.Module):
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = F.interpolate(F.relu(self.conv3(x)), scale_factor=2, mode='bilinear') # TODO check if this layer works properly
+        x = self.pool(F.relu(self.conv2(x))) # Downsampling by max pooling
+        x = F.interpolate(F.relu(self.conv3(x)), scale_factor=2, mode='bilinear') # Upsampling by interpolation
         x = self.conv4(x)
         return x
 
-#%% Loading, visualizing and analyzing the data
 
-# It was found that the input PNG file has W*H*4 dimensions, which is caused by the image being in RGBA format
-# For this practice, we are only interested in RGB dimensions
+### THE MAIN TRAINING SCRIPT STARTS HERE ###
         
-im = Image.open('rgb.png').convert('RGB')
+im = Image.open('rgb.png').convert('RGB') # The given rgb.png file was in RGBA format
 gt = Image.open('gt.png')
 
 imDim = im.size # 2022*1608
 
 dataset = SatelliteDataset(im, gt)
-trainLoader = torch.utils.data.DataLoader(dataset, batch_size = 75, shuffle=True, num_workers=2)
+
+# DataLoader to be used in training, batch size defined here, shuffling enabled to improve training performance
+trainLoader = torch.utils.data.DataLoader(dataset, batch_size = 100, shuffle=True, num_workers=2)
 
 # Checking if the dataloader returns the batches with proper size
 for i_batch, sample_batched in enumerate(trainLoader):
@@ -285,29 +303,33 @@ for i_batch, sample_batched in enumerate(trainLoader):
     if i_batch == 3:
         break
 
-trainIms = dataset.trainData
-trainLabels = dataset.trainLabels
-
-testIms = dataset.testData
-testLabels = dataset.testLabels
-
 # a sample tensor pair
 a = dataset[10]
 imA = np.array(a['image'])
 gtA = np.array(a['label']) 
+"""
+# Plotting the raw image and ground truth
+plt.figure(figsize=(13,6))
+plt.subplot(1,2,1)
+plt.imshow(dataset.rawData)
+plt.title('Input image')
+plt.subplot(1,2,2)
+plt.imshow(dataset.rawLabels)
+plt.title('Ground truth labels')
+plt.show()
+
 
 # Plotting random images from the training set
-"""
 plt.figure()
 for i in range(8):
     plt.suptitle('Data samples from the training dataset')
-    rInd = np.random.randint(0,high = len(trainIms))
+    rInd = np.random.randint(0,high = len(dataset.trainData))
     image, label = dataset.getSample(rInd)
     plt.subplot(4,8,i+1)
     plt.imshow(image)
     plt.subplot(4,8,i+9)
     plt.imshow(label)
-    rInd = np.random.randint(0,high = len(trainIms))
+    rInd = np.random.randint(0,high = len(dataset.trainData))
     image, label = dataset.getSample(rInd)
     plt.subplot(4,8,i+17)
     plt.imshow(image)
@@ -316,29 +338,9 @@ for i in range(8):
 plt.show()
 """
 
-# It was found that the ground truth contains two values for every pixel: 
-# - (255,255,255): White segments in the ground truth image
-# - (0,0,0): Black segments in the ground truth image
-"""
-plt.figure(figsize=(13,6))
-plt.subplot(1,2,1)
-plt.imshow(dataset.rawData)
-plt.title('Input image')
-plt.subplot(1,2,2)
-plt.imshow(dataset.rawLabels)
-plt.title('Ground truth labels')
-"""
-# Because of the memory limitations, the input size of our model can be 256*256*3 at most
-# Thus, the input image and the corresponding ground truth images should be separated into smaller images
-# for training and evaluating.
+# TODO Normalization is done on the input data
 
-# Because PyTorch batch notation has the format of [batch_size, channels, height, width], the W*H*3 array
-# notation will be rearranged for tensors
-
-# Normalization is done on the input data
-
-# %% Training the model
-
+# Model definition
 net = Model().to(device) # If CUDA is available, the model will use GPU for training and testing
 
 # As each pixel is classified into two classes, cross-entrophy loss function was used
@@ -346,10 +348,13 @@ optimizerLoss = nn.CrossEntropyLoss()
 
 #Adam was chosen as optimizer because of its superior optimization performance
 optimizer = torch.optim.Adam(net.parameters(), betas=(0.9, 0.99)) 
+a = dataset.trainData
 
-it = 1
+it = 1 # The number of iterations
 losses = []
-for epoch in range(10):
+epochs = 10
+plt.figure()
+for epoch in range(epochs):
     epochLoss = 0
     for i_batch, sample_batched in enumerate(trainLoader):
         print('Batch: '+str(i_batch))
@@ -359,18 +364,18 @@ for epoch in range(10):
         optimizer.zero_grad()
         outputs = net(inputs)
         loss = optimizerLoss(outputs, labels)
+        losses.append(loss)
         loss.backward()
         optimizer.step()
-        check = outputs.detach().cpu().numpy()[1,:,:,:]
         epochLoss += loss.item()
+
+        it += 1
     # Run through the test samples at the end of each epoch
     testSample = dataset.getTestBatch()
     with torch.no_grad():
         inputs, labels = testSample['image'].float().to(device), testSample['label'].long().to(device)
-        print(inputs.shape)
         
         outputs = net(inputs)
-        print(outputs.shape)
         bigIm = dataset.reconstructRaw(outputs.cpu())
         plt.figure()
         plt.imshow(bigIm)
