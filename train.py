@@ -35,9 +35,10 @@ class SatelliteDataset(torch.utils.data.Dataset):
         self.rawLabels = gt.resize((2048,1536), Image.ANTIALIAS)
         self.res = self.rawData.size # The raw image resolution (2048*1536)
         self.modelRes = 256 # Denotes the height and width of the model input (256*256)
-        print(os.path.isdir('dataset'))
+        
         if load and os.path.isdir('dataset'):
             self.trainData,self.trainData,self.testData,self.testLabels = self.loadDataset()
+            print('Dataset loaded successfully')
         else:
             self.createDataset()
             print('New dataset created successfully...')
@@ -297,6 +298,7 @@ def main():
     
     imDim = im.size # 2022*1608
     
+    # To override an existing dataset, use load=False
     dataset = SatelliteDataset(im, gt, load=True)
     batch_size = 5
     
@@ -309,8 +311,6 @@ def main():
         if i_batch == 3:
             break
     
-    
-    """
     # Plotting the raw image and ground truth
     plt.figure(figsize=(13,6))
     plt.subplot(1,2,1)
@@ -319,8 +319,8 @@ def main():
     plt.subplot(1,2,2)
     plt.imshow(dataset.rawLabels)
     plt.title('Ground truth labels')
+    plt.suptitle('The ')
     plt.show()
-    
     
     # Plotting random images from the training set
     plt.figure()
@@ -338,10 +338,9 @@ def main():
         plt.imshow(image)
         plt.subplot(4,8,i+25)
         plt.imshow(label)
+        plt.suptitle('Random images from the created dataset with their labels')
     plt.show()
-    """
     
-    # TODO Normalization is done on the input data
     
     # Model definition, (It requires approximately 660MB of GPU RAM)
     net = Model().to(device) # If CUDA is available, the model will use GPU for training and testing
@@ -356,9 +355,9 @@ def main():
     iterationLoss = []
     trainLoss = []
     itList = []
-    epochs = 5
+    epochs = 20
     
-    # When the batch size is 5, training does not require more than 1GB of RAM
+    # When the batch size is 5, training does not require more than 1GB of RAM overall
     for epoch in range(epochs):
         print('Epoch: {}'.format(epoch))
         epochLoss = 0
@@ -379,9 +378,7 @@ def main():
         trainLoss.append(epochLoss/i_batch)
         itList.append(it)
 
-            
-    # Three types of loss are plotted, loss of each iteration (batch), average of iteration losses over an epocs
-    # and testing loss calculated at the end of each epoch
+    # Loss of each iteration and the average loss over epochs are plotted
     plt.figure()
     plt.plot(range(it-1),iterationLoss, label='Iteration loss')
     plt.plot(itList,trainLoss, label='Average loss on epoch')
