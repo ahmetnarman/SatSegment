@@ -6,7 +6,7 @@ An exercise for image segmentation to detect buildings on a satellite image that
 
 * Python3
 * PyTorch and torchvision
-* Modules specified in the requirements.txt file
+* Modules specified in the `requirements.txt` file
 
 CUDA is required for training and testing with a GPU, but the model can run on a CPU as well.
 
@@ -20,8 +20,8 @@ The algorithm requires approximately 1GB of GPU RAM to run (~660MB used to store
 
 ## Usage
 
-The project includes two scripts that are 'train.py' and 'predict.py'. The 'train.py' script includes a class for model definition and a class for the dataset created using the labeled image. 
+The project includes two scripts that are `train.py` and `predict.py`. The `train.py` script includes a class for model definition and a class for the dataset created using the labeled image. 
 
-Running the training script, a dataset folder is created that includes 256x256 images and ground truth segmentations that are cropped up from the original labeled image and then augmented. If a dataset folder is already created, the code loads the training and testing data from there. Then, the train script defines a model and trains it on the training dataset and saves it. 
+Running the training script, a dataset folder is created that includes 256x256 images and ground truth segmentations that are cropped up from the original labeled image and then those images are augmented to extend the training dataset and improve performance. If a dataset folder is already created, the code loads the training and testing data from there. Then, the train script defines a model and trains it on the training dataset and saves it. 
 
 The prediction script loads the saved model and runs the test images on the model. Then, it combines the 256x256 images to construct the prediction of the original image. Then it shows the original image, ground truth labels and predictions on a grid of images.
