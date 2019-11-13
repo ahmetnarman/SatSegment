@@ -353,14 +353,16 @@ def main():
     optimizer = torch.optim.Adam(net.parameters(), betas=(0.9, 0.99)) 
     
     it = 1 # The number of iterations
-    losses = []
-    epochs = 40
+    iterationLoss = []
+    trainLoss = []
+    itList = []
+    epochs = 5
     
     # When the batch size is 5, training does not require more than 1GB of RAM
     for epoch in range(epochs):
+        print('Epoch: {}'.format(epoch))
         epochLoss = 0
         for i_batch, sample_batched in enumerate(trainLoader):
-            #print('Batch: {}'.format(i_batch), end='\r')
             
             inputs, labels = sample_batched['image'].to(device), sample_batched['label'].to(device)
             
@@ -368,26 +370,28 @@ def main():
             optimizer.zero_grad()
             outputs = net(inputs)
             loss = optimizerLoss(outputs, labels)
-            losses.append(loss)
+            iterationLoss.append(loss.item())
             loss.backward()
             optimizer.step()
             epochLoss += loss.item()
             
-            it += 1
-        
-        # Run through the test samples at the end of each epoch
-        testSample = dataset.getTestBatch()
-        # Because the testing batch is big, it requires like 1GB of RAM on its own
-        with torch.no_grad():
-            inputs, labels = testSample['image'].float().to(device), testSample['label'].long().to(device)
+            it += 1  
+        trainLoss.append(epochLoss/i_batch)
+        itList.append(it)
+
             
-            outputs = net(inputs)
-            bigIm = dataset.reconstructRaw(outputs.cpu())
-            #plt.figure()
-            plt.imshow(bigIm)
-            loss = optimizerLoss(outputs, labels)
-            print(loss)
+    # Three types of loss are plotted, loss of each iteration (batch), average of iteration losses over an epocs
+    # and testing loss calculated at the end of each epoch
+    plt.figure()
+    plt.plot(range(it-1),iterationLoss, label='Iteration loss')
+    plt.plot(itList,trainLoss, label='Average loss on epoch')
+    plt.xlabel('iteration')
+    plt.ylabel('CrossEntropy Loss')
+    plt.title('Training Loss of the model')
+    plt.legend()
+    plt.grid()
     
+    # Saving the model
     torch.save(net.state_dict(), 'model')
     
 if __name__ == "__main__":main()

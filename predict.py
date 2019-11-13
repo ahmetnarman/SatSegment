@@ -25,7 +25,6 @@ net = net.to(device)
 testSample = dataset.getTestBatch()
 with torch.no_grad():
     inputs, labels = testSample['image'].float().to(device), testSample['label'].long().to(device)
-    
     outputs = net(inputs)
-    bigIm = dataset.reconstructRaw(outputs.cpu())
+    bigIm = dataset.reconstructRaw(outputs.cpu() if torch.cuda.is_available() else outputs)
     plt.imshow(bigIm)
