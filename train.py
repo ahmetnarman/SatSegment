@@ -35,14 +35,14 @@ class SatelliteDataset(torch.utils.data.Dataset):
         self.rawLabels = gt.resize((2048,1536), Image.ANTIALIAS)
         self.res = self.rawData.size # The raw image resolution (2048*1536)
         self.modelRes = 256 # Denotes the height and width of the model input (256*256)
-        
+        print(os.path.isdir('dataset'))
         if load and os.path.isdir('dataset'):
-            self.trainData,self.trainData,self.trainData,self.trainData = self.loadDataset()
+            self.trainData,self.trainData,self.testData,self.testLabels = self.loadDataset()
         else:
             self.createDataset()
             print('New dataset created successfully...')
             
-            self.trainData,self.trainLabels,self.testData,self.testData = self.loadDataset()
+            self.trainData,self.trainLabels,self.testData,self.testLabels = self.loadDataset()
         
     def __len__(self):
         """Returns the size of the training dataset"""
@@ -125,7 +125,7 @@ class SatelliteDataset(torch.utils.data.Dataset):
         return label
     
     def reconstructRaw(self, output):
-        """ Takes in the batched testing output of the neural net and reconstructs the raw segmentation"""
+        """ Takes in the batched testing output of the neural net and reconstructs the segmentation of the original RGB image"""
         
         images = []
         for i in range(output.shape[0]):
@@ -166,7 +166,6 @@ class SatelliteDataset(torch.utils.data.Dataset):
         
         return images, labels
         
-    
     def augmentData(self, images, labels):
         """
         Applies different augmentation techniques to the data to extend the training dataset and improve generalization performance
@@ -179,6 +178,11 @@ class SatelliteDataset(torch.utils.data.Dataset):
                 images.append(TF.rotate(images[i], ang, resample = Image.BILINEAR, expand=True))
                 labels.append(TF.rotate(labels[i], ang, resample = Image.BILINEAR, expand=True))
         
+        # At the end of the loop, the original unrotated images are removed because they are also in the testing set
+        # Training the model using the data you use for testing is a No-No
+        del images[:i+1]
+        del labels[:i+1]
+        
         # Images flipped horizontally (Doubles the data)
         for i in range(len(images)):
             images.append(TF.hflip(images[i]))
@@ -188,7 +192,7 @@ class SatelliteDataset(torch.utils.data.Dataset):
         for i in range(len(images)):
             images.append(TF.vflip(images[i]))
             labels.append(TF.vflip(labels[i]))
-        """
+        
         # Brightness and contrast adjusted images added (Triples the data)
         # They could be adjusted separately but that would make the dataset too large
         for i in range(len(images)):
@@ -196,8 +200,8 @@ class SatelliteDataset(torch.utils.data.Dataset):
             labels.append(labels[i]) # Label brightness does not change
             images.append(TF.adjust_contrast(TF.adjust_brightness(images[i], brightness_factor=0.8), contrast_factor=0.8))
             labels.append(labels[i]) # Label brightness does not change
-        """
-        # With current augmentation pipeline, around 7500 training images are generated
+        
+        # With current augmentation pipeline, around 5600 training images are generated
         
         return images, labels
     
@@ -286,98 +290,104 @@ class Model(nn.Module):
 
 ### THE MAIN TRAINING SCRIPT STARTS HERE ###
         
-im = Image.open('rgb.png').convert('RGB') # The given rgb.png file was in RGBA format
-gt = Image.open('gt.png')
-
-imDim = im.size # 2022*1608
-
-dataset = SatelliteDataset(im, gt)
-
-# DataLoader to be used in training, batch size defined here, shuffling enabled to improve training performance
-trainLoader = torch.utils.data.DataLoader(dataset, batch_size = 100, shuffle=True, num_workers=2)
-
-# Checking if the dataloader returns the batches with proper size
-for i_batch, sample_batched in enumerate(trainLoader):
-    print(i_batch, sample_batched['image'].size(),sample_batched['label'].size())
-    # observe 4th batch and stop.
-    if i_batch == 3:
-        break
-
-# a sample tensor pair
-a = dataset[10]
-imA = np.array(a['image'])
-gtA = np.array(a['label']) 
-"""
-# Plotting the raw image and ground truth
-plt.figure(figsize=(13,6))
-plt.subplot(1,2,1)
-plt.imshow(dataset.rawData)
-plt.title('Input image')
-plt.subplot(1,2,2)
-plt.imshow(dataset.rawLabels)
-plt.title('Ground truth labels')
-plt.show()
-
-
-# Plotting random images from the training set
-plt.figure()
-for i in range(8):
-    plt.suptitle('Data samples from the training dataset')
-    rInd = np.random.randint(0,high = len(dataset.trainData))
-    image, label = dataset.getSample(rInd)
-    plt.subplot(4,8,i+1)
-    plt.imshow(image)
-    plt.subplot(4,8,i+9)
-    plt.imshow(label)
-    rInd = np.random.randint(0,high = len(dataset.trainData))
-    image, label = dataset.getSample(rInd)
-    plt.subplot(4,8,i+17)
-    plt.imshow(image)
-    plt.subplot(4,8,i+25)
-    plt.imshow(label)
-plt.show()
-"""
-
-# TODO Normalization is done on the input data
-
-# Model definition
-net = Model().to(device) # If CUDA is available, the model will use GPU for training and testing
-
-# As each pixel is classified into two classes, cross-entrophy loss function was used
-optimizerLoss = nn.CrossEntropyLoss()
-
-#Adam was chosen as optimizer because of its superior optimization performance
-optimizer = torch.optim.Adam(net.parameters(), betas=(0.9, 0.99)) 
-a = dataset.trainData
-
-it = 1 # The number of iterations
-losses = []
-epochs = 10
-plt.figure()
-for epoch in range(epochs):
-    epochLoss = 0
+def main():       
+    
+    im = Image.open('rgb.png').convert('RGB') # The given rgb.png file was in RGBA format
+    gt = Image.open('gt.png')
+    
+    imDim = im.size # 2022*1608
+    
+    dataset = SatelliteDataset(im, gt, load=True)
+    batch_size = 5
+    
+    # DataLoader to be used in training, batch size defined here, shuffling enabled to improve training performance
+    trainLoader = torch.utils.data.DataLoader(dataset, batch_size = batch_size, shuffle=True, num_workers=2)
+    
+    # Checking if the dataloader returns the batches with proper size
     for i_batch, sample_batched in enumerate(trainLoader):
-        print('Batch: '+str(i_batch))
-        inputs, labels = sample_batched['image'].to(device), sample_batched['label'].to(device)
+        print(i_batch, sample_batched['image'].size(),sample_batched['label'].size())
+        if i_batch == 3:
+            break
+    
+    
+    """
+    # Plotting the raw image and ground truth
+    plt.figure(figsize=(13,6))
+    plt.subplot(1,2,1)
+    plt.imshow(dataset.rawData)
+    plt.title('Input image')
+    plt.subplot(1,2,2)
+    plt.imshow(dataset.rawLabels)
+    plt.title('Ground truth labels')
+    plt.show()
+    
+    
+    # Plotting random images from the training set
+    plt.figure()
+    for i in range(8):
+        plt.suptitle('Data samples from the training dataset')
+        rInd = np.random.randint(0,high = len(dataset.trainData))
+        image, label = dataset.getSample(rInd)
+        plt.subplot(4,8,i+1)
+        plt.imshow(image)
+        plt.subplot(4,8,i+9)
+        plt.imshow(label)
+        rInd = np.random.randint(0,high = len(dataset.trainData))
+        image, label = dataset.getSample(rInd)
+        plt.subplot(4,8,i+17)
+        plt.imshow(image)
+        plt.subplot(4,8,i+25)
+        plt.imshow(label)
+    plt.show()
+    """
+    
+    # TODO Normalization is done on the input data
+    
+    # Model definition, (It requires approximately 660MB of GPU RAM)
+    net = Model().to(device) # If CUDA is available, the model will use GPU for training and testing
+    
+    # As each pixel is classified into two classes, cross-entrophy loss function was used
+    optimizerLoss = nn.CrossEntropyLoss()
+    
+    #Adam was chosen as optimizer because of its superior optimization performance
+    optimizer = torch.optim.Adam(net.parameters(), betas=(0.9, 0.99)) 
+    
+    it = 1 # The number of iterations
+    losses = []
+    epochs = 40
+    
+    # When the batch size is 5, training does not require more than 1GB of RAM
+    for epoch in range(epochs):
+        epochLoss = 0
+        for i_batch, sample_batched in enumerate(trainLoader):
+            #print('Batch: {}'.format(i_batch), end='\r')
+            
+            inputs, labels = sample_batched['image'].to(device), sample_batched['label'].to(device)
+            
+            # making parameter gradients zero before forward and back pass
+            optimizer.zero_grad()
+            outputs = net(inputs)
+            loss = optimizerLoss(outputs, labels)
+            losses.append(loss)
+            loss.backward()
+            optimizer.step()
+            epochLoss += loss.item()
+            
+            it += 1
         
-        # making parameter gradients zero before forward and back pass
-        optimizer.zero_grad()
-        outputs = net(inputs)
-        loss = optimizerLoss(outputs, labels)
-        losses.append(loss)
-        loss.backward()
-        optimizer.step()
-        epochLoss += loss.item()
-
-        it += 1
-    # Run through the test samples at the end of each epoch
-    testSample = dataset.getTestBatch()
-    with torch.no_grad():
-        inputs, labels = testSample['image'].float().to(device), testSample['label'].long().to(device)
-        
-        outputs = net(inputs)
-        bigIm = dataset.reconstructRaw(outputs.cpu())
-        plt.figure()
-        plt.imshow(bigIm)
-        loss = optimizerLoss(outputs, labels)
-        print(loss)
+        # Run through the test samples at the end of each epoch
+        testSample = dataset.getTestBatch()
+        # Because the testing batch is big, it requires like 1GB of RAM on its own
+        with torch.no_grad():
+            inputs, labels = testSample['image'].float().to(device), testSample['label'].long().to(device)
+            
+            outputs = net(inputs)
+            bigIm = dataset.reconstructRaw(outputs.cpu())
+            #plt.figure()
+            plt.imshow(bigIm)
+            loss = optimizerLoss(outputs, labels)
+            print(loss)
+    
+    torch.save(net.state_dict(), 'model')
+    
+if __name__ == "__main__":main()
